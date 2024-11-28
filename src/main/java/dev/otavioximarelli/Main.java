@@ -12,22 +12,26 @@ import java.io.InputStream;
 import java.util.HashMap;
 import java.util.Map;
 
+// Classe principal que implementa a interface RequestHandler para processar requisições Lambda
 public class Main implements RequestHandler<Map<String, Object>, Map<String, Object>> {
 
+    // Cliente S3 para interagir com o serviço AWS S3
     private final S3Client s3Client = S3Client.builder().build();
+    // Objeto para conversão de JSON para objetos Java
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
     public Map<String, Object> handleRequest(Map<String, Object> input, Context context) {
-        //GET THE URL SHORT CODE FROM THE JSON
-        System.out.println("Evento recebido pelo Lam   bda: " + input);
+        // Log do evento recebido pela função Lambda
+        System.out.println("Evento recebido pelo Lambda: " + input);
 
-        // Obter os parâmetros do caminho
+        // Obter os parâmetros do caminho da URL
         Map<String, String> pathParameters = (Map<String, String>) input.get("pathParameters");
         if (pathParameters == null || !pathParameters.containsKey("urlCode")) {
             throw new IllegalArgumentException("urlCode is missing in pathParameters");
         }
 
+        // Recuperar o código curto da URL a partir dos parâmetros
         String shortUrlCode = pathParameters.get("urlCode");
         if (shortUrlCode.isEmpty()) {
             throw new IllegalArgumentException("Invalid input: 'urlCode' is required");
@@ -35,57 +39,54 @@ public class Main implements RequestHandler<Map<String, Object>, Map<String, Obj
 
         System.out.println("Código encurtado recebido: " + shortUrlCode);
 
-        //SETUP S3 CONNECTION
-
+        // Configurar a requisição para buscar o objeto no S3
         System.out.println("Attempting to fetch key: " + shortUrlCode + ".json");
-        System.out.println("Bucket: my-bucket-1-zika");
-
+        System.out.println("Bucket: YOUR-S3-BUCKET-NAME");
 
         GetObjectRequest getObjectRequest = GetObjectRequest.builder()
-                .bucket("my-bucket-1-zika")
-                .key(shortUrlCode + ".json")
+                .bucket("YOUR-S3-BUCKET-NAME") // Substitua pelo nome real do seu bucket
+                .key(shortUrlCode + ".json")  // O nome do arquivo JSON no S3
                 .build();
 
-
-        //GET THE S3 OBJECT AND DESERIALIZE
+        // Recuperar o objeto do S3 e desserializá-lo em um objeto Java
         OriginalUrlData originalUrl;
         try (InputStream s3ObjectStream = s3Client.getObject(getObjectRequest)) {
             originalUrl = objectMapper.readValue(s3ObjectStream, OriginalUrlData.class);
         } catch (NoSuchKeyException e) {
+            // Se o arquivo não for encontrado no S3, retornar um erro 404
             System.err.println("Error: Key not found - " + getObjectRequest.key());
             return buildResponse(404, "The specified URL code does not exist.");
         } catch (S3Exception e) {
+            // Log de erro relacionado ao S3
             System.err.println("S3 Error: " + e.awsErrorDetails().errorMessage());
             throw new RuntimeException("S3 Error: " + e.awsErrorDetails().errorMessage(), e);
         } catch (Exception e) {
+            // Tratamento genérico para erros de leitura ou desserialização
             throw new RuntimeException("Error reading or deserializing S3 object", e);
         }
 
-
-        //VERIFY THE EXPIRATION TIME
+        // Verificar se a URL encurtada expirou
         long currentTimeSeconds = System.currentTimeMillis() / 1000;
         if (originalUrl.getExpirationTime() < currentTimeSeconds) {
             return buildResponse(410, "This URL has expired.");
         }
 
-        // REDIRECT TO THE ORIGINAL URL
+        // Retornar um redirecionamento para a URL original
         Map<String, Object> headers = new HashMap<>();
-        headers.put("Location", originalUrl.getOriginalUrl());
+        headers.put("Location", originalUrl.getOriginalUrl()); // Adiciona a URL original ao cabeçalho de redirecionamento
 
-        return buildResponse(301, headers);
-
+        return buildResponse(301, headers); // Retorna o status HTTP 301 (Redirecionamento permanente)
     }
 
-    //RESPONSE METHOD
+    // Método auxiliar para construir uma resposta HTTP com status e corpo
     private Map<String, Object> buildResponse(int statusCode, Object body) {
         Map<String, Object> response = new HashMap<>();
         response.put("statusCode", statusCode);
         if (body instanceof String) {
-            response.put("body", body);
+            response.put("body", body); // Adiciona o corpo da resposta se for uma string
         } else if (body instanceof Map) {
-            response.put("headers", body);
+            response.put("headers", body); // Adiciona os cabeçalhos da resposta se for um mapa
         }
         return response;
     }
-
 }
